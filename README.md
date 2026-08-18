@@ -1,5 +1,5 @@
 ### ufw-gui-terminal
-![UFW-GUI](https://raw.githubusercontent.com/beinggood/ufw-GUI-terminal/refs/heads/main/UFW-GUI.png)
+![UFW-GUI](https://raw.githubusercontent.com/beinggood/ufw-GUI-terminal/refs/heads/main/ufw_screenshot.png)
 一个基于 `dialog` 的 UFW 防火墙终端图形化配置工具。  
 支持鼠标点击操作，适合在 SSH 终端、服务器维护、批量配置防火墙规则时使用。
 
