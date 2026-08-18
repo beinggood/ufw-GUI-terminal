@@ -13,8 +13,6 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-# ... 其余代码保持不变 ...
-
 # 检查 root 权限
 if [ "$EUID" -ne 0 ]; then
     echo -e "${RED}[错误] 请使用 root 权限运行此脚本：sudo bash $0${NC}"
@@ -53,12 +51,12 @@ main_menu() {
             --menu "\n请选择操作（支持鼠标点击）：" 24 65 14 \
             "1" " 查看防火墙状态" \
             "2" " 启用 / 禁用防火墙" \
-            "3" "️  设置默认策略" \
-            "4" " 添加放行规则（端口）" \
-            "5" " 添加服务预设规则" \
-            "6" " 添加拒绝规则" \
-            "7" " 查看已有规则列表" \
-            "8" "️  删除规则" \
+            "3" "️ 设置默认策略" \
+            "4" " 添加放行规则" \
+            "5" " 添加信任IP来源" \
+            "6" " 添加服务预设规则" \
+            "7" " 添加拒绝规则" \
+            "8" "️ 删除规则" \
             "9" " 备份规则" \
             "10" " 恢复规则" \
             "11" " 查看命令日志" \
@@ -76,9 +74,9 @@ main_menu() {
             2)  toggle_firewall ;;
             3)  set_default_policy ;;
             4)  add_allow_rule ;;
-            5)  add_service_rule ;;
-            6)  add_deny_rule ;;
-            7)  show_rules ;;
+            5)  add_trusted_source ;;
+            6)  add_service_rule ;;
+            7)  add_deny_rule ;;
             8)  delete_rule ;;
             9)  backup_rules ;;
             10) restore_rules ;;
@@ -164,7 +162,7 @@ set_default_policy() {
 }
 
 # ============================================================
-#  添加放行规则
+#  添加放行规则（端口）
 # ============================================================
 add_allow_rule() {
     while true; do
@@ -235,6 +233,34 @@ add_allow_rule() {
 }
 
 # ============================================================
+#  添加信任IP来源（不限端口/协议）
+# ============================================================
+add_trusted_source() {
+    source_ip=$(dialog --title "添加信任IP来源" \
+        --inputbox "请输入信任的来源 IP 或网段：\n\n例如：\n  192.168.1.100\n  10.0.0.0/8\n  172.16.0.0/12\n  203.0.113.50/32" \
+        14 60 \
+        3>&1 1>&2 2>&3) || return
+
+    if [ -z "$source_ip" ]; then
+        dialog --title "错误" --msgbox "来源 IP 不能为空！" 8 45
+        return
+    fi
+
+    cmd="ufw allow from $source_ip"
+
+    confirm=$(dialog --title "确认信任IP规则" \
+        --yesno "即将执行以下命令：\n\n  $cmd\n\n该规则会放行来自 $source_ip 的所有端口和协议。\n\n是否继续？" \
+        14 65 \
+        3>&1 1>&2 2>&3)
+
+    if [ $? -eq 0 ]; then
+        eval $cmd
+        log_cmd "$cmd"
+        dialog --title "成功" --msgbox "信任IP规则已添加：\n\n  $cmd" 10 60
+    fi
+}
+
+# ============================================================
 #  服务预设规则
 # ============================================================
 add_service_rule() {
@@ -249,37 +275,32 @@ add_service_rule() {
         "PostgreSQL(5432)" "PostgreSQL - TCP 5432" \
         "Redis(6379)" "Redis 缓存 - TCP 6379" \
         "MongoDB(27017)" "MongoDB - TCP 27017" \
-        "Docker(2376)" "Docker 远程 API - TCP 2376" \
-        "VNC(5900)" "VNC 远程桌面 - TCP 5900" \
-        "RDP(3389)" "远程桌面 RDP - TCP 3389" \
+        "SMTP(25)" "SMTP 邮件发送 - TCP 25" \
+        "POP3(110)" "POP3 邮件接收 - TCP 110" \
+        "IMAP(143)" "IMAP 邮件接收 - TCP 143" \
         3>&1 1>&2 2>&3) || return
 
-    # 提取端口和协议
-    case $service in
-        "SSH(22)")         port="22";     proto="tcp" ;;
-        "HTTP(80)")       port="80";     proto="tcp" ;;
-        "HTTPS(443)")     port="443";    proto="tcp" ;;
-        "FTP(21)")        port="21";     proto="tcp" ;;
-        "DNS(53)")        port="53";     proto="udp" ;;
-        "MySQL(3306)")    port="3306";   proto="tcp" ;;
-        "PostgreSQL(5432)") port="5432"; proto="tcp" ;;
-        "Redis(6379)")    port="6379";   proto="tcp" ;;
-        "MongoDB(27017)") port="27017";  proto="tcp" ;;
-        "Docker(2376)")   port="2376";   proto="tcp" ;;
-        "VNC(5900)")      port="5900";   proto="tcp" ;;
-        "RDP(3389)")      port="3389";   proto="tcp" ;;
-    esac
+    # 解析服务名和端口
+    svc_name=$(echo "$service" | grep -oP '^[A-Za-z]+')
+    svc_port=$(echo "$service" | grep -oP '\d+')
 
-    cmd="ufw allow $port/$proto"
+    # 判断协议
+    if [ "$svc_name" = "DNS" ]; then
+        proto="udp"
+    else
+        proto="tcp"
+    fi
 
-    confirm=$(dialog --title "确认" \
-        --yesno "即将放行服务：$service\n\n  命令：$cmd\n\n是否继续？" 12 55 \
+    cmd="ufw allow $svc_port/$proto"
+
+    confirm=$(dialog --title "确认服务规则" \
+        --yesno "即将执行以下命令：\n\n  $cmd\n\n是否继续？" 10 60 \
         3>&1 1>&2 2>&3)
 
     if [ $? -eq 0 ]; then
         eval $cmd
         log_cmd "$cmd"
-        dialog --title "成功" --msgbox "已放行：$service\n\n  $cmd" 10 55
+        dialog --title "成功" --msgbox "服务规则已添加：\n\n  $cmd" 10 60
     fi
 }
 
@@ -287,150 +308,158 @@ add_service_rule() {
 #  添加拒绝规则
 # ============================================================
 add_deny_rule() {
-    while true; do
-        port=$(dialog --title "添加拒绝规则" \
-            --inputbox "请输入要拒绝的端口号：" 10 50 \
-            3>&1 1>&2 2>&3) || return
+    # 输入端口
+    port=$(dialog --title "添加拒绝规则" \
+        --inputbox "请输入要拒绝的端口号（如 8080）：" 10 50 \
+        3>&1 1>&2 2>&3) || return
 
-        if [ -z "$port" ]; then
-            dialog --title "错误" --msgbox "端口不能为空！" 8 40
-            continue
-        fi
+    if [ -z "$port" ]; then
+        dialog --title "错误" --msgbox "端口不能为空！" 8 40
+        return
+    fi
 
-        proto=$(dialog --title "添加拒绝规则" \
-            --menu "选择协议：" 12 50 3 \
-            "tcp" "TCP" \
-            "udp" "UDP" \
-            "both" "TCP + UDP（同时拒绝）" \
-            3>&1 1>&2 2>&3) || return
+    # 选择协议
+    proto=$(dialog --title "添加拒绝规则" \
+        --menu "选择协议类型：" 12 50 3 \
+        "tcp" "TCP" \
+        "udp" "UDP" \
+        "both" "TCP + UDP（同时拒绝）" \
+        3>&1 1>&2 2>&3) || return
 
-        if [ "$proto" = "both" ]; then
-            cmd_tcp="ufw deny $port/tcp"
-            cmd_udp="ufw deny $port/udp"
-            cmd_display="$cmd_tcp\n$cmd_udp"
+    if [ "$proto" = "both" ]; then
+        cmd_tcp="ufw deny $port/tcp"
+        cmd_udp="ufw deny $port/udp"
+        cmd_display="$cmd_tcp\n$cmd_udp"
 
-            confirm=$(dialog --title "确认" \
-                --yesno "即将执行：\n\n  $cmd_display\n\n是否继续？" 12 55 \
-                3>&1 1>&2 2>&3)
-
-            if [ $? -eq 0 ]; then
-                eval $cmd_tcp
-                eval $cmd_udp
-                log_cmd "$cmd_tcp"
-                log_cmd "$cmd_udp"
-                dialog --title "成功" --msgbox "拒绝规则已添加（TCP + UDP）：\n\n  $cmd_display" 12 55
-            fi
-        else
-            cmd="ufw deny $port/$proto"
-
-            confirm=$(dialog --title "确认" \
-                --yesno "即将执行：\n\n  $cmd\n\n是否继续？" 10 55 \
-                3>&1 1>&2 2>&3)
-
-            if [ $? -eq 0 ]; then
-                eval $cmd
-                log_cmd "$cmd"
-                dialog --title "成功" --msgbox "拒绝规则已添加：\n\n  $cmd" 10 55
-            fi
-        fi
-        return  # 添加完一条规则后返回主菜单
-    done
-}
-
-# ============================================================
-#  查看规则
-# ============================================================
-show_rules() {
-    rules=$(ufw status numbered 2>&1 | sed -r "s/\x1B\[[0-9;]*[a-zA-Z]//g")
-    dialog --title "当前规则列表" --scrolltext --msgbox "$rules" 22 75
-}
-
-# ============================================================
-#  删除规则
-# ============================================================
-delete_rule() {
-    while true; do
-        # 1. 动态获取当前规则列表，并去掉颜色转义码防止 dialog 排版错位
-        rules_raw=$(ufw status numbered 2>&1 | sed -r "s/\x1B\[[0-9;]*[a-zA-Z]//g")
-
-        # 2. 解析规则，构建 dialog --menu 的选项列表
-        menu_items=()
-        while IFS= read -r line; do
-            # 匹配 [数字] 开头的规则行
-            if [[ "$line" =~ ^\[[[:space:]]*([0-9]+)\][[:space:]]*(.*) ]]; then
-                num="${BASH_REMATCH[1]}"
-                detail="${BASH_REMATCH[2]}"
-                # 清理多余空格，使显示更整齐
-                detail=$(echo "$detail" | sed 's/  */ /g')
-                menu_items+=("$num" "$detail")
-            fi
-        done <<< "$rules_raw"
-
-        # 如果没有规则，提示并返回
-        if [ ${#menu_items[@]} -eq 0 ]; then
-            dialog --title "提示" --msgbox "当前没有任何规则，无需删除。" 8 50
-            return
-        fi
-
-        # 3. 弹出规则选择菜单（支持鼠标点击）
-        selected=$(dialog --title "删除规则 - 请选择要删除的规则" \
-            --menu "\n点击选中要删除的规则，然后点击「确定」：\n（点击「取消」返回主菜单）" \
-            22 78 15 \
-            "${menu_items[@]}" \
-            3>&1 1>&2 2>&3) || return
-
-        # 4. 从 menu_items 中找到选中规则的详细信息
-        selected_detail=""
-        for ((i=0; i<${#menu_items[@]}; i+=2)); do
-            if [ "${menu_items[$i]}" = "$selected" ]; then
-                selected_detail="${menu_items[$((i+1))]}"
-                break
-            fi
-        done
-
-        # 5. 弹出确认删除对话框
-        confirm=$(dialog --title "⚠️ 确认删除" \
-            --yesno "确定要删除以下规则吗？\n\n  规则编号：[$selected]\n  规则详情：$selected_detail\n\n  执行命令：ufw delete $selected\n\n点击「是」删除，点击「否」返回规则列表。" \
-            14 65 \
+        confirm=$(dialog --title "确认拒绝规则" \
+            --yesno "即将执行以下命令：\n\n  $cmd_display\n\n是否继续？" 12 65 \
             3>&1 1>&2 2>&3)
 
         if [ $? -eq 0 ]; then
-            # 用户点击「是」，执行删除
-            ufw --force delete "$selected"
-            log_cmd "ufw delete $selected"
-            dialog --title "成功" --msgbox "规则 #$selected 已成功删除！" 8 45
-            # 删除后继续循环，刷新列表，方便连续删除
-        else
-            # 用户点击「否」，不删除，回到规则列表重新选择
-            continue
+            eval $cmd_tcp
+            eval $cmd_udp
+            log_cmd "$cmd_tcp"
+            log_cmd "$cmd_udp"
+            dialog --title "成功" --msgbox "拒绝规则已添加（TCP + UDP）：\n\n  $cmd_display" 12 65
         fi
-    done
-}
-
-# ============================================================
-#  查看命令日志
-# ============================================================
-show_log() {
-    if [ -s "$LOG_FILE" ]; then
-        log_content=$(cat "$LOG_FILE")
-        dialog --title "本次会话执行的命令" --scrolltext --msgbox "$log_content" 20 70
     else
-        dialog --title "命令日志" --msgbox "本次会话尚未执行任何命令。" 8 50
+        cmd="ufw deny $port/$proto"
+
+        confirm=$(dialog --title "确认拒绝规则" \
+            --yesno "即将执行以下命令：\n\n  $cmd\n\n是否继续？" 10 60 \
+            3>&1 1>&2 2>&3)
+
+        if [ $? -eq 0 ]; then
+            eval $cmd
+            log_cmd "$cmd"
+            dialog --title "成功" --msgbox "拒绝规则已添加：\n\n  $cmd" 10 60
+        fi
     fi
 }
 
 # ============================================================
-#  重置防火墙
+#  删除规则（复选框多选删除）
 # ============================================================
-reset_firewall() {
-    confirm=$(dialog --title "⚠️ 警告" \
-        --yesno "此操作将重置所有 UFW 规则！\n\n包括所有已添加的放行/拒绝规则。\n确定要继续吗？" 12 55 \
+delete_rule() {
+    # 获取带编号的规则列表
+    rules_raw=$(ufw status numbered 2>&1 | sed -r "s/\x1B\[[0-9;]*[a-zA-Z]//g")
+
+    # 检查是否有规则
+    if ! echo "$rules_raw" | grep -q "\[.*\]"; then
+        dialog --title "删除规则" --msgbox "当前没有任何规则可以删除。" 8 50
+        return
+    fi
+
+    # 解析规则，构建 checklist 参数
+    # 每条规则格式: 编号 "规则描述" off
+    checklist_items=()
+    while IFS= read -r line; do
+        # 匹配形如 [ 1] 的规则行
+        if echo "$line" | grep -qP '^\[\s*\d+\]'; then
+            # 提取编号（去掉方括号和空格）
+            num=$(echo "$line" | grep -oP '\d+' | head -1)
+            # 提取规则描述（编号后面的内容）
+            desc=$(echo "$line" | sed -E 's/^\[\s*[0-9]+\]\s*//')
+            # 添加到 checklist 参数数组
+            checklist_items+=("$num" "$desc" "off")
+        fi
+    done <<< "$rules_raw"
+
+    # 计算列表高度（规则数量，最多显示15条）
+    item_count=${#checklist_items[@]}
+    list_height=$((item_count / 3))
+    if [ $list_height -gt 15 ]; then
+        list_height=15
+    fi
+    if [ $list_height -lt 3 ]; then
+        list_height=3
+    fi
+
+    # 显示复选框列表，让用户勾选要删除的规则
+    selected=$(dialog --title "删除规则" \
+        --separate-output \
+        --checklist "\n请勾选要删除的规则（空格键切换选中状态）：" \
+        24 75 "$list_height" \
+        "${checklist_items[@]}" \
+        3>&1 1>&2 2>&3)
+
+    exit_status=$?
+
+    # 用户点击取消，直接返回主菜单
+    if [ $exit_status -ne 0 ]; then
+        return
+    fi
+
+    # 用户没有勾选任何规则
+    if [ -z "$selected" ]; then
+        dialog --title "提示" --msgbox "未选择任何规则，已取消删除操作。" 8 50
+        return
+    fi
+
+    # 统计选中数量，构建确认信息
+    selected_count=$(echo "$selected" | wc -l)
+    selected_list=$(echo "$selected" | tr '\n' ' ')
+
+    # 构建要删除的规则描述（用于确认框展示）
+    confirm_desc=""
+    for num in $selected; do
+        rule_line=$(echo "$rules_raw" | grep -P "^\[\s*${num}\]")
+        rule_desc=$(echo "$rule_line" | sed -E 's/^\[\s*[0-9]+\]\s*//')
+        confirm_desc="${confirm_desc}  [${num}] ${rule_desc}\n"
+    done
+
+    # 确认删除
+    confirm=$(dialog --title "确认删除" \
+        --yesno "即将删除以下 ${selected_count} 条规则：\n\n${confirm_desc}\n此操作不可撤销，是否继续？" \
+        18 70 \
         3>&1 1>&2 2>&3)
 
     if [ $? -eq 0 ]; then
-        ufw --force reset
-        log_cmd "ufw --force reset"
-        dialog --title "完成" --msgbox "防火墙已重置为初始状态。" 8 45
+        success=0
+        failed=0
+        fail_info=""
+
+        # 按编号从大到小删除，避免删除后编号偏移
+        sorted_nums=$(echo "$selected" | sort -rn)
+
+        for num in $sorted_nums; do
+            cmd="ufw --force delete $num"
+            result=$(eval $cmd 2>&1)
+            if [ $? -eq 0 ]; then
+                log_cmd "$cmd"
+                ((success++))
+            else
+                ((failed++))
+                fail_info="${fail_info}  [${num}] ${result}\n"
+            fi
+        done
+
+        # 显示结果
+        if [ $failed -eq 0 ]; then
+            dialog --title "成功" --msgbox "已成功删除 ${success} 条规则！" 8 45
+        else
+            dialog --title "部分失败" --msgbox "删除完成：\n\n  成功：${success} 条\n  失败：${failed} 条\n\n失败详情：\n${fail_info}" 14 65
+        fi
     fi
 }
 
@@ -441,12 +470,7 @@ backup_rules() {
     backup_file=$(dialog --title "备份规则" \
         --inputbox "请输入备份文件保存路径：\n\n（留空则默认保存到 /root/ufw-rules-backup-$(date +%Y%m%d%H%M%S).txt）" \
         12 65 \
-        3>&1 1>&2 2>&3)
-
-    # 点取消或关闭，直接返回主菜单
-    if [ $? -ne 0 ]; then
-        return
-    fi
+        3>&1 1>&2 2>&3) || return
 
     # 如果用户没输入路径，使用默认路径
     if [ -z "$backup_file" ]; then
@@ -470,12 +494,7 @@ restore_rules() {
     restore_file=$(dialog --title "恢复规则" \
         --inputbox "请输入备份文件路径：\n\n（备份文件应为 ufw status 的输出格式）" \
         10 65 \
-        3>&1 1>&2 2>&3)
-
-    # 点取消或关闭，直接返回主菜单
-    if [ $? -ne 0 ]; then
-        return
-    fi
+        3>&1 1>&2 2>&3) || return
 
     # 校验文件是否存在
     if [ -z "$restore_file" ] || [ ! -f "$restore_file" ]; then
@@ -530,10 +549,39 @@ restore_rules() {
 }
 
 # ============================================================
+#  查看命令日志
+# ============================================================
+show_log() {
+    if [ ! -s "$LOG_FILE" ]; then
+        dialog --title "命令日志" --msgbox "本次会话尚未执行任何命令。" 8 50
+        return
+    fi
+
+    log_content=$(cat "$LOG_FILE")
+    dialog --title "本次会话命令日志" --scrolltext --msgbox "$log_content" 20 70
+}
+
+# ============================================================
+#  重置防火墙
+# ============================================================
+reset_firewall() {
+    confirm=$(dialog --title "⚠️ 重置防火墙" \
+        --yesno "即将执行：ufw reset\n\n此操作会清除所有已有规则，并将防火墙恢复为初始状态。\n\n是否继续？" \
+        12 60 \
+        3>&1 1>&2 2>&3)
+
+    if [ $? -eq 0 ]; then
+        ufw --force reset
+        log_cmd "ufw --force reset"
+        dialog --title "完成" --msgbox "防火墙已重置！" 8 40
+    fi
+}
+
+# ============================================================
 #  启动
 # ============================================================
-dialog --title "欢迎" --msgbox "欢迎使用 UFW 防火墙图形化配置工具！\n\n此工具将引导您完成防火墙的配置。\n\n支持鼠标点击操作。\n\n️ 请使用 root 权限运行。" 14 55
-
 main_menu
 
-dialog --title "再见" --msgbox "感谢使用 UFW 防火墙图形化配置工具！\n\n命令日志已保存到：\n  $LOG_FILE" 10 55
+# 退出时显示再见
+dialog --title "再见" --msgbox "感谢使用 UFW 防火墙图形化配置工具！" 8 50
+clear
